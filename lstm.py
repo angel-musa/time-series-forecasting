@@ -16,210 +16,195 @@ import plotly.graph_objects as go
 import pandas_ta as ta
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 import sys
+import streamlit as st
 
-def forecast_lstm(ticker): 
+def forecast_lstm(ticker):
+    try:
+        # Download stock data with error handling
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        raw_data = yf.download(ticker, start="2021-01-01", end=end_date, timeout=30, progress=False)
 
-    # Download stock data
-    end_date=datetime.now().strftime('%Y-%m-%d')
-    azn_df = yf.download(ticker, start="2021-01-01", end=end_date)
+        # Check if data is empty
+        if raw_data.empty:
+            st.error(f"No data found for ticker {ticker}. Please check the ticker symbol.")
+            return None, None, None, None
 
-    # # Plot Adjusted Close price
-    # sns.set(rc={'figure.figsize':(16, 8)})
-    # azn_df['Adj Close'].plot(grid=True)
-    # plt.title('MSFT Adjusted Close Price', color='black', fontsize=20)
-    # plt.xlabel('Year', color='black', fontsize=15)
-    # plt.ylabel('Stock price', color='black', fontsize=15)
-    # plt.show()
+        # Handle different DataFrame structures from yfinance
+        if isinstance(raw_data.columns, pd.MultiIndex):
+            raw_data.columns = raw_data.columns.get_level_values(0)
 
-    # Prepare data
-    azn_adj = azn_df[['Adj Close']]
-    azn_adj_arr = azn_adj.values
-    training_data_len = int(0.8 * len(azn_adj_arr))
+        # Get Adj Close data with fallback
+        if 'Adj Close' in raw_data.columns:
+            azn_df = raw_data[['Adj Close']].copy()
+        elif 'Close' in raw_data.columns:
+            azn_df = raw_data[['Close']].copy()
+            azn_df.columns = ['Adj Close']  # Rename for consistency
+            st.info(f"Using Close price instead of Adjusted Close for {ticker}")
+        else:
+            st.error(f"No Close or Adj Close data found for {ticker}. Available columns: {list(raw_data.columns)}")
+            return None, None, None, None
 
-    # Create train and test data sets
-    train = azn_adj_arr[:training_data_len]
-    test = azn_adj_arr[training_data_len:]
+        # Check if we have enough data
+        if len(azn_df) < 100:
+            st.error(f"Insufficient data for ticker {ticker}. Need at least 100 data points.")
+            return None, None, None, None
 
-    # Normalize the data
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    train_scaled = scaler.fit_transform(train)
+        # Prepare data
+        azn_adj = azn_df[['Adj Close']]
+        azn_adj_arr = azn_adj.values
+        training_data_len = int(0.8 * len(azn_adj_arr))
 
-    # Create training data structure with 60 time-steps
-    X_train, y_train = [], []
-    for i in range(60, len(train_scaled)):
-        X_train.append(train_scaled[i-60:i, 0])
-        y_train.append(train_scaled[i, 0])
+        # Create train and test data sets
+        train = azn_adj_arr[:training_data_len]
+        test = azn_adj_arr[training_data_len:]
 
-    X_train, y_train = np.array(X_train), np.array(y_train)
-    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+        # Normalize the data
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        train_scaled = scaler.fit_transform(train)
 
-    # Build LSTM model
-    model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], 1), activation='tanh'))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=50, return_sequences=True, activation='tanh'))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=50, return_sequences=True, activation='tanh'))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=50, activation='tanh'))
-    model.add(Dropout(0.2))
-    model.add(Dense(units=1))
-    model.compile(optimizer='adam', loss='mean_squared_error')
+        # Create training data structure with 60 time-steps
+        X_train, y_train = [], []
+        for i in range(60, len(train_scaled)):
+            X_train.append(train_scaled[i-60:i, 0])
+            y_train.append(train_scaled[i, 0])
 
-    # Train the model
-    model.fit(X_train, y_train, epochs=5, batch_size=64)
+        X_train, y_train = np.array(X_train), np.array(y_train)
+        X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
 
-    # Prepare test data
-    total_data = np.concatenate((train, test), axis=0)
-    inputs = total_data[len(total_data) - len(test) - 60:]
-    inputs = inputs.reshape(-1, 1)
-    inputs = scaler.transform(inputs)
+        # Build LSTM model
+        model = Sequential()
+        model.add(LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], 1), activation='tanh'))
+        model.add(Dropout(0.2))
+        model.add(LSTM(units=50, return_sequences=True, activation='tanh'))
+        model.add(Dropout(0.2))
+        model.add(LSTM(units=50, return_sequences=True, activation='tanh'))
+        model.add(Dropout(0.2))
+        model.add(LSTM(units=50, activation='tanh'))
+        model.add(Dropout(0.2))
+        model.add(Dense(units=1))
+        model.compile(optimizer='adam', loss='mean_squared_error')
 
-    X_test = []
-    for i in range(60, inputs.shape[0]):
-        X_test.append(inputs[i-60:i, 0])
+        # Train the model
+        model.fit(X_train, y_train, epochs=5, batch_size=64, verbose=0)
 
-    X_test = np.array(X_test)
-    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+        # Prepare test data
+        total_data = np.concatenate((train, test), axis=0)
+        inputs = total_data[len(total_data) - len(test) - 60:]
+        inputs = inputs.reshape(-1, 1)
+        inputs = scaler.transform(inputs)
 
-    # Predict and inverse transform the predictions
-    predictions = model.predict(X_test)
-    predictions = scaler.inverse_transform(predictions)
+        X_test = []
+        for i in range(60, inputs.shape[0]):
+            X_test.append(inputs[i-60:i, 0])
 
-    # Evaluate the model
-    rmse = np.sqrt(np.mean(predictions - test)**2)
-    print(f"Root Mean Squared Error: {rmse}")
-
-    # Plot the results
-    train = azn_adj[:training_data_len]
-    test = azn_adj[training_data_len:]
-    test['Predictions'] = predictions
-
-    # Create the Plotly figure
-    fig = go.Figure()
-
-    # Add traces for the training data
-    fig.add_trace(go.Scatter(x=train.index, y=train['Adj Close'], mode='lines', name='Training'))
-
-    # Add traces for the actual test data
-    fig.add_trace(go.Scatter(x=test.index, y=test['Adj Close'], mode='lines', name='Actual'))
-
-    # Add traces for the predicted test data
-    fig.add_trace(go.Scatter(x=test.index, y=test['Predictions'], mode='lines', name='Predicted'))
-
-    # Update the layout of the figure
-    fig.update_layout(
-        title=ticker + " Time Series Analysis",
-        xaxis_title="Year",
-        yaxis_title="Stock Price",
-        legend_title="Legend",
-        template="plotly_white"
-    )
-
-    # Assuming 'fig' is your plotly figure
-
-    fig.update_layout(
-        hovermode='x unified',  # This adds a vertical line across the graph
-        xaxis=dict(
-            showspikes=True,    # This will show a spike (line) at the x-value
-            spikemode='across', # This will make the spike go across the entire plot
-            spikesnap='cursor', # This makes the spike snap to the cursor
-            showline=True,      # Ensures the x-axis line is visible
-        ),
-        yaxis=dict(
-            showspikes=True,    # This will show a spike (line) at the y-value
-            spikemode='across', # This will make the spike go across the entire plot
-            spikesnap='cursor', # This makes the spike snap to the cursor
-            showline=True,      # Ensures the y-axis line is visible
-        )
-    )
-
-    fig.update_traces(
-        hoverinfo="x+y",  # This ensures both x and y values are shown on hover
-        mode='lines',     # Sets the mode to lines for continuous graphs
-    )
-
-        # fig.show()
-
-    # # Predict Adjusted Close price for the next day
-    # last_60_days = azn_adj[-60:].values
-    # last_60_days_scaled = scaler.transform(last_60_days)
-    # X_test = np.array([last_60_days_scaled])
-    # X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
-
-    # pred_price = model.predict(X_test)
-    # pred_price = scaler.inverse_transform(pred_price)
-    # print(f"Predicted Adjusted Close Price for the next day: {pred_price[0][0]}")
-
-    # Predict Adjusted Close price for the next 5 days
-    pred_prices = []
-    last_60_days = azn_adj[-60:].values
-
-        # Calculate ATR
-    atr = ta.atr(azn_df['High'], azn_df['Low'], azn_df['Adj Close'], length=14).iloc[-1]
-
-    for _ in range(5):
-        # Scale the last 60 days data
-        last_60_days_scaled = scaler.transform(last_60_days)
-
-        # Prepare the input to the model
-        X_test = np.array([last_60_days_scaled])
+        X_test = np.array(X_test)
         X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
 
-        # Predict the next day's price
-        pred_price = model.predict(X_test)
-        pred_price = scaler.inverse_transform(pred_price)
+        # Predict and inverse transform the predictions
+        predictions = model.predict(X_test, verbose=0)
+        predictions = scaler.inverse_transform(predictions)
 
-        # Append the prediction to the list
-        pred_prices.append(pred_price[0][0])
+        # Evaluate the model
+        rmse = np.sqrt(np.mean((predictions - test)**2))
+        st.write(f"Root Mean Squared Error: {rmse:.2f}")
 
-        # Update the last 60 days data by removing the oldest value and adding the predicted price
-        last_60_days = np.append(last_60_days[1:], pred_price, axis=0)
+        # Prepare data for plotting
+        train_data = azn_adj[:training_data_len]
+        test_data = azn_adj[training_data_len:].copy()
+        test_data['Predictions'] = predictions
 
-    # # Calculate the average of the predicted prices
-    # average_pred_price = np.mean(pred_prices)
+        # Create the Plotly figure
+        fig = go.Figure()
 
-    # # Get the last actual closing price from the data
-    # last_actual_close = azn_adj['Adj Close'].iloc[-1]
+        # Add traces for the training data
+        fig.add_trace(go.Scatter(x=train_data.index, y=train_data['Adj Close'], mode='lines', name='Training'))
 
-    # # Compare the average predicted price to the ATR range
-    # if average_pred_price > last_actual_close + atr:
-    #     result = "Above ATR"
-    # elif average_pred_price < last_actual_close - atr:
-    #     result = "Below ATR"
-    # else:
-    #     result = "Within ATR"
+        # Add traces for the actual test data
+        fig.add_trace(go.Scatter(x=test_data.index, y=test_data['Adj Close'], mode='lines', name='Actual'))
 
-    # # # Compare the average predicted price to the last actual closing price
-    # # if average_pred_price > last_actual_close:
-    # #     result = "Positive"
-    # # else:
-    # #     result = "Negative"
+        # Add traces for the predicted test data
+        fig.add_trace(go.Scatter(x=test_data.index, y=test_data['Predictions'], mode='lines', name='Predicted'))
 
-    # # Output the result
-    # print(f"The average forecasted price for the next 5 days is {average_pred_price:.2f}.")
-    # print(f"The last actual closing price is {last_actual_close:.2f}.")
-    # print(f"The forecast is {result}.")
+        # Update the layout of the figure
+        fig.update_layout(
+            title=ticker + " Time Series Analysis",
+            xaxis_title="Year",
+            yaxis_title="Stock Price",
+            legend_title="Legend",
+            template="plotly_white"
+        )
 
-    # Residuals
-    residuals = test['Adj Close'].values - test['Predictions']
+        fig.update_layout(
+            hovermode='x unified',
+            xaxis=dict(
+                showspikes=True,
+                spikemode='across',
+                spikesnap='cursor',
+                showline=True,
+            ),
+            yaxis=dict(
+                showspikes=True,
+                spikemode='across',
+                spikesnap='cursor',
+                showline=True,
+            )
+        )
 
-    # Plot ACF and PACF of residuals
-    fig_acf = plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plot_acf(residuals, lags=20)
-    plt.title('ACF of Residuals')
+        fig.update_traces(
+            hoverinfo="x+y",
+            mode='lines',
+        )
 
-    fig_pacf = plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plot_pacf(residuals, lags=20)
-    plt.title('PACF of Residuals')
+        # Predict Adjusted Close price for the next 5 days
+        pred_prices = []
+        last_60_days = azn_adj[-60:].values
 
-    fig_residuals = plt.figure(figsize=(10, 5))
-    plt.plot(residuals)
-    plt.title('Residuals')
-    plt.xlabel('Time')
-    plt.ylabel('Residuals')
-    plt.axhline(0, color='red', linestyle='--')
+        # Calculate ATR if we have OHLC data
+        atr = None
+        if all(col in raw_data.columns for col in ['High', 'Low', 'Close']):
+            atr = ta.atr(raw_data['High'], raw_data['Low'], raw_data['Close'], length=14).iloc[-1]
 
-    return fig, fig_acf, fig_pacf, fig_residuals
+        for _ in range(5):
+            # Scale the last 60 days data
+            last_60_days_scaled = scaler.transform(last_60_days)
+
+            # Prepare the input to the model
+            X_test_future = np.array([last_60_days_scaled])
+            X_test_future = np.reshape(X_test_future, (X_test_future.shape[0], X_test_future.shape[1], 1))
+
+            # Predict the next day's price
+            pred_price = model.predict(X_test_future, verbose=0)
+            pred_price = scaler.inverse_transform(pred_price)
+
+            # Append the prediction to the list
+            pred_prices.append(pred_price[0][0])
+
+            # Update the last 60 days data by removing the oldest value and adding the predicted price
+            last_60_days = np.append(last_60_days[1:], pred_price, axis=0)
+
+        # Residuals
+        residuals = test_data['Adj Close'].values - test_data['Predictions'].values.flatten()
+
+        # Plot ACF and PACF of residuals
+        fig_acf = plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plot_acf(residuals, lags=20)
+        plt.title('ACF of Residuals')
+
+        fig_pacf = plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plot_pacf(residuals, lags=20)
+        plt.title('PACF of Residuals')
+
+        fig_residuals = plt.figure(figsize=(10, 5))
+        plt.plot(residuals)
+        plt.title('Residuals')
+        plt.xlabel('Time')
+        plt.ylabel('Residuals')
+        plt.axhline(0, color='red', linestyle='--')
+
+        return fig, fig_acf, fig_pacf, fig_residuals
+
+    except Exception as e:
+        st.error(f"Error in LSTM modeling: {str(e)}")
+        return None, None, None, None

@@ -12,3 +12,5 @@ statsmodels
 plotly
 pandas-ta
 streamlit
+prophet
+scikit-optimize

@@ -10,7 +10,8 @@ from lstm import forecast_lstm
 
 # Function to display explanations for ACF and PACF plots
 def display_plots_and_explanations(acf_fig, pacf_fig, residuals_fig):
-    # Display ACF and PACF plots
+    if acf_fig is not None and pacf_fig is not None and residuals_fig is not None:
+        # Display ACF and PACF plots
         st.pyplot(acf_fig)
         st.write("""
         **Autocorrelation Function (ACF)**: The ACF plot helps identify the correlation between a time series and its lagged values. Significant spikes in the ACF indicate the presence of autocorrelation, which suggests that past values have an influence on current values.
@@ -27,7 +28,6 @@ def display_plots_and_explanations(acf_fig, pacf_fig, residuals_fig):
         **Residuals Plot**: The residuals plot shows the difference between the predicted and actual values. Ideally, the residuals should be randomly scattered around zero, indicating that the model has captured all underlying patterns in the data. Patterns in the residuals may suggest that the model can be improved. 
         """)
 
-
 # Main screen for ticker search
 st.title("Time-Series Forecasting Dashboard")
 
@@ -40,44 +40,52 @@ ticker = st.text_input("Enter Ticker Symbol (e.g., AAPL):")
 end_date = datetime.now().strftime('%Y-%m-%d')
 
 if ticker:
-    # Fetching data from yfinance
-    data = yf.download(ticker, start="2021-01-01", end=end_date)
-    st.write(f"Stock data for {ticker}")
-    st.line_chart(data['Close'])
+    # Fetching data from yfinance with error handling
+    try:
+        data = yf.download(ticker, start="2021-01-01", end=end_date, progress=False)
+        
+        if data.empty:
+            st.error(f"No data found for ticker {ticker}. Please check the ticker symbol.")
+        else:
+            st.write(f"Stock data for {ticker}")
+            st.line_chart(data['Close'])
 
-    # Short-term forecasting placeholder
-    st.subheader("Short-Term Forecast")
-    fig, ax = plt.subplots()
-    ax.plot(data.index, data['Close'], label='Actual Data')
+            # Short-term forecasting
+            st.subheader("Short-Term Forecast")
 
-    # Load the selected model's code from the corresponding file
-    if model_option == "ARIMA":
-        final_forecast_fig, acf_fig1, pacf_fig1, residuals_fig1 = forecast_arima(ticker)
-        st.pyplot(final_forecast_fig)
-        display_plots_and_explanations(acf_fig1, pacf_fig1, residuals_fig1)
-    elif model_option == "XGboost":
-        final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = forecast_boost(ticker)
-        st.pyplot(final_forecast_fig)
-        display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
-    elif model_option == "Prophet":
-        final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = forecast_prophet(ticker)
-        st.plotly_chart(final_forecast_fig)
-        display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
-    elif model_option == "LSTM":
-        final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = forecast_lstm(ticker)
-        st.plotly_chart(final_forecast_fig)
-        display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
-         
-
-    
-    # # Run the forecast and get the predicted data
-    # predictions, train, test = model_module.forecast(data['Close'])
-    
-    # # Plot training, testing, and predicted data
-    # ax.plot(train.index, train, label='Training Data')
-    # ax.plot(test.index, test, label='Testing Data')
-    # ax.plot(predictions.index, predictions, label='Predicted Data')
-
-    # ax.legend()
-    # st.pyplot(fig)
-
+            # Load the selected model's code from the corresponding file
+            if model_option == "ARIMA":
+                with st.spinner(f'Training ARIMA model for {ticker}... This may take a few moments.'):
+                    results = forecast_arima(ticker)
+                if results and all(result is not None for result in results):
+                    final_forecast_fig, acf_fig1, pacf_fig1, residuals_fig1 = results
+                    st.pyplot(final_forecast_fig)
+                    display_plots_and_explanations(acf_fig1, pacf_fig1, residuals_fig1)
+                    
+            elif model_option == "XGBoost":
+                with st.spinner(f'Training XGBoost model for {ticker}... This may take a few moments.'):
+                    results = forecast_boost(ticker)
+                if results and all(result is not None for result in results):
+                    final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = results
+                    st.pyplot(final_forecast_fig)
+                    display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
+                    
+            elif model_option == "Prophet":
+                with st.spinner(f'Training Prophet model for {ticker}... This may take a few moments.'):
+                    results = forecast_prophet(ticker)
+                if results and all(result is not None for result in results):
+                    final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = results
+                    st.plotly_chart(final_forecast_fig)
+                    display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
+                    
+            elif model_option == "LSTM":
+                with st.spinner(f'Training LSTM model for {ticker}... This may take a few moments. Training neural network...'):
+                    results = forecast_lstm(ticker)
+                if results and all(result is not None for result in results):
+                    final_forecast_fig, acf_fig2, pacf_fig2, residuals_fig2 = results
+                    st.plotly_chart(final_forecast_fig)
+                    display_plots_and_explanations(acf_fig2, pacf_fig2, residuals_fig2)
+                    
+    except Exception as e:
+        st.error(f"Error downloading data for {ticker}: {str(e)}")
+        st.info("Please try again or check your internet connection.")
